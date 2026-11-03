@@ -1,4 +1,4 @@
-import { createServer } from 'http';
+import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
 const PORT = 8787;
@@ -44,7 +44,7 @@ wss.on('connection', (ws) => {
 
       ws.send(JSON.stringify({ type: 'start', id: msgId }));
 
-      // Fetch streaming output from Ollama
+      // Fetch streaming output from local Ollama
       const response = await fetch('http://localhost:11434/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,15 +56,24 @@ wss.on('connection', (ws) => {
         })
       });
 
+      if (!response.ok || !response.body) {
+        throw new Error(`Ollama returned status ${response.status}`);
+      }
+
+      // Convert Web ReadableStream to Node async iterator
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let residual = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         const chunkText = decoder.decode(value, { stream: true });
-        const lines = chunkText.split('\n');
+        const lines = (residual + chunkText).split('\n');
+        
+        // Save uncompleted trailing line to buffer
+        residual = lines.pop() || '';
 
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -73,7 +82,7 @@ wss.on('connection', (ws) => {
             const token = json.response;
 
             if (token) {
-              // Send stream chunks for Chrome's text HUD and WebSpeech TTS engine
+              // Send stream tokens to Chrome HUD and WebSpeech TTS
               ws.send(JSON.stringify({
                 type: 'text',
                 id: msgId,
@@ -89,7 +98,7 @@ wss.on('connection', (ws) => {
               }));
             }
           } catch (e) {
-            // Ignore partial chunks
+            // Ignore partial JSON lines
           }
         }
       }
@@ -97,11 +106,11 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ type: 'done', id: msgId }));
 
     } catch (err) {
-      console.error('Bridge error:', err);
+      console.error('Bridge processing error:', err);
     }
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`JARVIS Chrome-native bridge running on http://localhost:${PORT}`);
+  console.log(`JARVIS Node-updated bridge running on http://localhost:${PORT}`);
 });
